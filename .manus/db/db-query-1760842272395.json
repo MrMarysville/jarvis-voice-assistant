@@ -1,0 +1,9 @@
+{
+  "query": "INSERT INTO lineItems (id, invoiceId, description, quantity, unitPrice, totalPrice, color, itemNumber, createdAt) VALUES \n('li_1', 'inv_1760831744355_1', 'Screen Print - Front Logo', 100, '5.50', '550.00', 'Black', 'SP-001', NOW()),\n('li_2', 'inv_1760831744355_1', 'Embroidery - Left Chest', 50, '8.00', '400.00', 'Navy Blue', 'EMB-002', NOW()),\n('li_3', 'inv_1760831744355_1', 'DTG Print - Full Color Back', 25, '12.00', '300.00', 'Full Color', 'DTG-003', NOW())",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway02.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 2uKj7x2ub82QTKR.root --database NkVF5YKxaLDmpxQ4YRYdo2 --execute INSERT INTO lineItems (id, invoiceId, description, quantity, unitPrice, totalPrice, color, itemNumber, createdAt) VALUES \n('li_1', 'inv_1760831744355_1', 'Screen Print - Front Logo', 100, '5.50', '550.00', 'Black', 'SP-001', NOW()),\n('li_2', 'inv_1760831744355_1', 'Embroidery - Left Chest', 50, '8.00', '400.00', 'Navy Blue', 'EMB-002', NOW()),\n('li_3', 'inv_1760831744355_1', 'DTG Print - Full Color Back', 25, '12.00', '300.00', 'Full Color', 'DTG-003', NOW())",
+  "rows": [],
+  "messages": [],
+  "stdout": "",
+  "stderr": "",
+  "execution_time_ms": 141
+}

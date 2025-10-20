@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "mysql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "5",
+      "when": 1760830982004,
+      "tag": "0000_confused_blink",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "5",
+      "when": 1760831328181,
+      "tag": "0001_fair_spiral",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1760833804544,
+      "tag": "0002_lonely_the_anarchist",
+      "breakpoints": true
+    }
+  ]
+}

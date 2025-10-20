@@ -1,0 +1,9 @@
+{
+  "query": "INSERT INTO payments (id, invoiceId, amount, paymentMethod, paymentDate, notes, createdAt) VALUES \n('pay_1', 'inv_1760831744355_1', '500.00', 'Credit Card', '2025-10-15', 'Initial deposit - 50%', NOW()),\n('pay_2', 'inv_1760831744355_1', '500.00', 'Check', '2025-10-20', 'Second payment', NOW())",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway02.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 2uKj7x2ub82QTKR.root --database NkVF5YKxaLDmpxQ4YRYdo2 --execute INSERT INTO payments (id, invoiceId, amount, paymentMethod, paymentDate, notes, createdAt) VALUES \n('pay_1', 'inv_1760831744355_1', '500.00', 'Credit Card', '2025-10-15', 'Initial deposit - 50%', NOW()),\n('pay_2', 'inv_1760831744355_1', '500.00', 'Check', '2025-10-20', 'Second payment', NOW())",
+  "rows": [],
+  "messages": [],
+  "stdout": "",
+  "stderr": "",
+  "execution_time_ms": 125
+}

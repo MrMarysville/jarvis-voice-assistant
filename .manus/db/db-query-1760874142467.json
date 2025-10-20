@@ -1,0 +1,17 @@
+{
+  "query": "SELECT id, quoteNumber, customerId, status, totalAmount FROM quotes LIMIT 5;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway02.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 2uKj7x2ub82QTKR.root --database NkVF5YKxaLDmpxQ4YRYdo2 --execute SELECT id, quoteNumber, customerId, status, totalAmount FROM quotes LIMIT 5;",
+  "rows": [
+    {
+      "id": "quote_1760831744346_1",
+      "quoteNumber": "1001",
+      "customerId": "cust_1760831744244_1",
+      "status": "quote",
+      "totalAmount": "1250.00"
+    }
+  ],
+  "messages": [],
+  "stdout": "id\tquoteNumber\tcustomerId\tstatus\ttotalAmount\nquote_1760831744346_1\t1001\tcust_1760831744244_1\tquote\t1250.00\n",
+  "stderr": "",
+  "execution_time_ms": 157
+}
