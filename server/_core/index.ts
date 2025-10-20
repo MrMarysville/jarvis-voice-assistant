@@ -7,8 +7,7 @@ import { registerOAuthRoutes } from "./oauth";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
-import elevenLabsTools from "../elevenLabsTools";
-import agentConfig from "../agentConfig";
+
 import { setupVoicePipelineServer } from "../voicePipeline";
 
 function isPortAvailable(port: number): Promise<boolean> {
@@ -46,11 +45,7 @@ async function startServer() {
       createContext,
     })
   );
-  // ElevenLabs Agent Tools
-  app.use("/api/elevenlabs/tools", elevenLabsTools);
-  
-  // Agent Configuration
-  app.use("/api/agent", agentConfig);
+
   
   // Voice Pipeline WebSocket
   setupVoicePipelineServer(server);

@@ -387,7 +387,7 @@ interface ActivityLog {
  * Log an activity
  */
 export async function logActivity(activity: ActivityLog) {
-  return db.createActivityLog({
+  return db.logActivity({
     ...activity,
     timestamp: new Date(),
   });

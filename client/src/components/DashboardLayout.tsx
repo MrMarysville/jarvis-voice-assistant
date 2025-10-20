@@ -143,7 +143,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
             
             {/* Right side actions */}
             <div className="flex items-center gap-2">
-              <VoiceAssistantElevenLabs />
+              <VoiceAssistantSimple />
               <NotificationsPanel />
             </div>
           </div>

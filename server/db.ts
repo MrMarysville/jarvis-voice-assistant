@@ -1285,3 +1285,19 @@ export async function calculateInvoiceTotal(invoiceId: string): Promise<number> 
 
 
 
+
+// Get all tasks
+export async function getAllTasks() {
+  const db = await getDb();
+  return await db.select().from(tasks);
+}
+
+// Get activity log by entity
+export async function getActivityLogByEntity(entityType: string, entityId: string) {
+  const db = await getDb();
+  return await db
+    .select()
+    .from(activityLog)
+    .where(and(eq(activityLog.entityType, entityType), eq(activityLog.entityId, entityId)))
+    .orderBy(desc(activityLog.createdAt));
+}
