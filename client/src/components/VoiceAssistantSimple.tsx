@@ -7,7 +7,7 @@
  * - ElevenLabs TTS streaming
  */
 
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { Mic, MicOff, Loader2 } from 'lucide-react';
 import { Button } from './ui/button';
 
@@ -33,6 +33,38 @@ export function VoiceAssistantSimple() {
       audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
     }
     return audioContextRef.current;
+  }, []);
+
+  /**
+   * Cleanup audio context and WebSocket on unmount
+   */
+  useEffect(() => {
+    return () => {
+      // Clean up audio context
+      if (audioContextRef.current) {
+        audioContextRef.current.close().catch(err => {
+          console.error('[Voice] Error closing audio context:', err);
+        });
+        audioContextRef.current = null;
+      }
+
+      // Clean up audio queue
+      audioQueueRef.current = [];
+      isPlayingRef.current = false;
+
+      // Clean up WebSocket
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+
+      // Clean up media recorder
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        mediaRecorderRef.current.stop();
+        mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
+        mediaRecorderRef.current = null;
+      }
+    };
   }, []);
 
   /**

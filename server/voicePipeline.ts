@@ -384,21 +384,31 @@ Your role is to help users create quotes for custom printing orders through natu
 
 When a user describes an order, you should:
 1. Listen carefully to all details (product, quantity, sizes, decoration method)
-2. Ask clarifying questions if information is missing
-3. Create the quote in the system
+2. Ask clarifying questions if information is missing (customer name, product details, quantity, pricing)
+3. Create the quote in the system once you have enough information
 4. Confirm the quote was created and provide the quote number and total
 
 Be professional, friendly, and efficient. Speak naturally and conversationally.
 
 You have access to these tools:
 - create_quote: Create a new quote for a customer
+  Required params: customer_name, line_items (array)
+  Optional params: customer_email, notes, due_date, group_name, decoration_method
+  Line item format: { product_name, quantity, unit_price, item_number?, color?, description? }
+  Example: {"tool": "create_quote", "params": {"customer_name": "ABC Company", "line_items": [{"product_name": "T-Shirt", "quantity": 100, "unit_price": 5.00}]}}
+
 - search_products: Search for products in the catalog
+  Params: { query: "search term" }
+
 - get_customer_history: Get recent quotes for a customer
+  Params: { customer_name: "Company Name" }
 
-When you need to use a tool, respond with a JSON object like:
-{"tool": "create_quote", "params": {"customer_name": "ABC Company", "line_items": [...]}}
+When you need to use a tool, respond with ONLY a JSON object (no other text):
+{"tool": "create_quote", "params": {"customer_name": "ABC Company", "line_items": [{"product_name": "T-Shirt", "quantity": 100, "unit_price": 5.00}]}}
 
-Otherwise, respond with natural conversational text.`;
+Otherwise, respond with natural conversational text.
+
+Important: Always collect customer name, product details, quantity, and pricing before creating a quote.`;
 
   // Call Claude
   const response = await anthropic.messages.create({
@@ -418,9 +428,47 @@ Otherwise, respond with natural conversational text.`;
   // Check if Claude wants to use a tool
   if (assistantMessage.includes('"tool":')) {
     try {
-      const toolCall = JSON.parse(assistantMessage);
+      // Attempt to extract JSON from the message
+      // Claude might wrap it in markdown code blocks or include extra text
+      let jsonStr = assistantMessage.trim();
+
+      // Remove markdown code blocks if present
+      if (jsonStr.includes('```json')) {
+        const match = jsonStr.match(/```json\s*(\{[\s\S]*?\})\s*```/);
+        if (match) {
+          jsonStr = match[1];
+        }
+      } else if (jsonStr.includes('```')) {
+        const match = jsonStr.match(/```\s*(\{[\s\S]*?\})\s*```/);
+        if (match) {
+          jsonStr = match[1];
+        }
+      }
+
+      // Try to find JSON object in the text
+      const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        jsonStr = jsonMatch[0];
+      }
+
+      const toolCall = JSON.parse(jsonStr);
+
+      // Validate tool call structure
+      if (!toolCall.tool || typeof toolCall.tool !== 'string') {
+        throw new Error('Invalid tool call: missing or invalid "tool" field');
+      }
+
+      if (!toolCall.params || typeof toolCall.params !== 'object') {
+        console.warn('[Voice Pipeline] Tool call missing params, using empty object');
+        toolCall.params = {};
+      }
+
+      console.log('[Voice Pipeline] Executing tool:', toolCall.tool, 'with params:', JSON.stringify(toolCall.params));
+
       const toolResult = await executeTool(toolCall.tool, toolCall.params);
-      
+
+      console.log('[Voice Pipeline] Tool result:', JSON.stringify(toolResult));
+
       // Add tool result to conversation
       session.conversationHistory.push({
         role: 'assistant',
@@ -450,6 +498,18 @@ Otherwise, respond with natural conversational text.`;
       return finalMessage;
     } catch (error) {
       console.error('[Voice Pipeline] Tool execution error:', error);
+
+      // Return a helpful error message to the user
+      const errorMessage = error instanceof Error
+        ? `I encountered an error while processing your request: ${error.message}. Could you please try rephrasing your request?`
+        : 'I encountered an unexpected error. Could you please try again?';
+
+      session.conversationHistory.push({
+        role: 'assistant',
+        content: errorMessage
+      });
+
+      return errorMessage;
     }
   }
 
@@ -470,31 +530,133 @@ async function executeTool(toolName: string, params: any): Promise<any> {
 
   switch (toolName) {
     case 'create_quote':
-      // Create quote in database
-      const [quote] = await db.insert(schema.quotes).values({
-        customerName: params.customer_name,
-        status: 'draft',
-        subtotal: 0,
-        tax: 0,
-        total: 0
-      }).returning();
+      // Import required functions
+      const { getCustomerByName, createCustomer, getNextQuoteNumber, recalculateQuoteTotal } = await import('./db');
 
-      // Add line items
-      for (const item of params.line_items || []) {
-        await db.insert(schema.lineItems).values({
-          quoteId: quote.id,
-          description: item.product_name,
-          quantity: item.quantity,
-          unitPrice: item.unit_price,
-          total: item.quantity * item.unit_price
+      // Find or create customer
+      let customer = await getCustomerByName(params.customer_name);
+      if (!customer) {
+        customer = await createCustomer({
+          name: params.customer_name,
+          email: params.customer_email || null,
+          phone: null,
+          company: params.customer_name,
+          billingAddress: null,
+          shippingAddress: null,
+          notes: null,
         });
       }
 
+      if (!customer) {
+        return {
+          success: false,
+          error: 'Failed to find or create customer'
+        };
+      }
+
+      // Get next quote number
+      const quoteNumber = await getNextQuoteNumber();
+
+      // Generate quote ID
+      const quoteId = `quote_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+
+      // Create quote in database with correct schema
+      await db.insert(schema.quotes).values({
+        id: quoteId,
+        quoteNumber: quoteNumber,
+        customerId: customer.id,
+        status: 'quote',
+        totalAmount: '0.00', // Will be recalculated
+        taxAmount: '0.00',
+        taxRate: '0.00',
+        customerDueDate: params.due_date ? new Date(params.due_date) : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+        notes: params.notes || null,
+      });
+
+      // Create a line item group for the products
+      const groupId = `lig_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+      await db.insert(schema.lineItemGroups).values({
+        id: groupId,
+        quoteId: quoteId,
+        invoiceId: null,
+        name: params.group_name || 'Order Items',
+        decorationMethod: params.decoration_method || null,
+        notes: null,
+        sortOrder: 0,
+      });
+
+      // Add line items to the group with price validation
+      let itemIndex = 0;
+      const priceWarnings: string[] = [];
+
+      for (const item of params.line_items || []) {
+        const lineItemId = `li_${Date.now()}_${itemIndex}_${Math.random().toString(36).substring(2, 9)}`;
+
+        // Try to validate price against product catalog if item_number is provided
+        let validatedPrice = item.unit_price || 0;
+        let productId = null;
+
+        if (item.item_number) {
+          try {
+            const products = await db.select()
+              .from(schema.products)
+              .where(eq(schema.products.itemNumber, item.item_number))
+              .limit(1);
+
+            if (products.length > 0) {
+              const catalogProduct = products[0];
+              productId = catalogProduct.id;
+              const catalogPrice = parseFloat(catalogProduct.basePrice || '0');
+
+              // Warn if price differs significantly from catalog
+              if (Math.abs(validatedPrice - catalogPrice) > 0.01) {
+                priceWarnings.push(
+                  `${item.product_name || item.item_number}: Voice price $${validatedPrice.toFixed(2)} differs from catalog $${catalogPrice.toFixed(2)}`
+                );
+              }
+            }
+          } catch (err) {
+            console.warn('[Voice Pipeline] Could not validate price for item:', item.item_number, err);
+          }
+        }
+
+        await db.insert(schema.lineItems).values({
+          id: lineItemId,
+          groupId: groupId,
+          quoteId: quoteId,
+          invoiceId: null,
+          productId: productId,
+          itemNumber: item.item_number || null,
+          description: item.product_name || item.description,
+          color: item.color || null,
+          quantity: item.quantity || 0,
+          unitPrice: String(validatedPrice),
+          totalPrice: String((item.quantity || 0) * validatedPrice),
+          sortOrder: itemIndex,
+        });
+
+        itemIndex++;
+      }
+
+      // Add price warnings to notes if any
+      if (priceWarnings.length > 0) {
+        const warningNote = `\n\nPrice Warnings:\n${priceWarnings.join('\n')}`;
+        await db.update(schema.quotes)
+          .set({ notes: (params.notes || '') + warningNote })
+          .where(eq(schema.quotes.id, quoteId));
+      }
+
+      // Recalculate quote total
+      const calculatedTotal = await recalculateQuoteTotal(quoteId);
+
       return {
         success: true,
-        quote_id: quote.id,
-        quote_number: `Q-${String(quote.id).padStart(5, '0')}`,
-        message: 'Quote created successfully'
+        quote_id: quoteId,
+        quote_number: `Q-${String(quoteNumber).padStart(5, '0')}`,
+        customer_name: customer.name,
+        total: calculatedTotal || 0,
+        item_count: params.line_items?.length || 0,
+        message: `Quote created successfully for ${customer.name} with ${params.line_items?.length || 0} items totaling $${(calculatedTotal || 0).toFixed(2)}`
       };
 
     case 'search_products':

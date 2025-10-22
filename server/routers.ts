@@ -904,19 +904,21 @@ Current date: ${new Date().toISOString().split('T')[0]}`;
                 notes: null,
               });
             }
-            
+
             if (customer) {
-              await db.createQuote({
+              const newQuote = await db.createQuote({
                 customerId: customer.id,
                 status: "quote",
                 totalAmount: "0.00",
                 taxAmount: "0.00",
                 taxRate: "0.00",
                 customerDueDate: functionArgs.dueDate ? new Date(functionArgs.dueDate) : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-                notes: null,
+                notes: "Created via voice assistant - add line items to complete",
               });
               actionResult = { type: "navigate", path: "/quotes" };
-              responseText = `Created a new quote for ${functionArgs.customerName}. Opening quotes page.`;
+              responseText = `Created quote #${newQuote.quoteNumber} for ${functionArgs.customerName}. Opening quotes page where you can add line items.`;
+            } else {
+              responseText = `Failed to create customer ${functionArgs.customerName}. Please try again.`;
             }
             break;
 
