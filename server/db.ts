@@ -278,11 +278,11 @@ export async function getAllQuotes() {
   return await db.select().from(quotes).orderBy(desc(quotes.createdAt));
 }
 
-export async function getQuotesByStatus(status: string) {
+export async function getQuotesByStatus(status: Quote["status"]) {
   const db = await getDb();
   if (!db) return [];
 
-  return await db.select().from(quotes).where(eq(quotes.status, status as any)).orderBy(desc(quotes.createdAt));
+  return await db.select().from(quotes).where(eq(quotes.status, status)).orderBy(desc(quotes.createdAt));
 }
 
 // ============================================================================
@@ -345,11 +345,11 @@ export async function getAllInvoices() {
   return await db.select().from(invoices).orderBy(desc(invoices.createdAt));
 }
 
-export async function getInvoicesByStatus(status: string) {
+export async function getInvoicesByStatus(status: Invoice["status"]) {
   const db = await getDb();
   if (!db) return [];
 
-  return await db.select().from(invoices).where(eq(invoices.status, status as any)).orderBy(desc(invoices.createdAt));
+  return await db.select().from(invoices).where(eq(invoices.status, status)).orderBy(desc(invoices.createdAt));
 }
 
 export async function getInvoicesByDateRange(startDate: Date, endDate: Date) {
@@ -943,8 +943,8 @@ export async function convertQuoteToInvoice(quoteId: string, userId: string) {
   const invoiceId = `inv_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
   
   // Get next invoice number
-  const [result] = await db.execute("SELECT MAX(invoiceNumber) as maxNum FROM invoices");
-  const maxNum = (result as any)[0]?.maxNum || 0;
+  const [result] = await db.execute<{ maxNum: number }>("SELECT MAX(invoiceNumber) as maxNum FROM invoices");
+  const maxNum = (result as Array<{ maxNum: number | null }>)[0]?.maxNum || 0;
   const invoiceNumber = maxNum + 1;
 
   const newInvoice: InsertInvoice = {
@@ -1094,8 +1094,8 @@ export async function createQuoteWithLineItems(input: {
   const quoteId = `quote_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
   
   // Get next quote number
-  const [result] = await db.execute("SELECT MAX(quoteNumber) as maxNum FROM quotes");
-  const maxNum = (result as any)[0]?.maxNum || 0;
+  const [result] = await db.execute<{ maxNum: number }>("SELECT MAX(quoteNumber) as maxNum FROM quotes");
+  const maxNum = (result as Array<{ maxNum: number | null }>)[0]?.maxNum || 0;
   const quoteNumber = maxNum + 1;
 
   const newQuote: InsertQuote = {

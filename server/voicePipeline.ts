@@ -1,6 +1,6 @@
 /**
  * Voice Pipeline WebSocket Server
- * 
+ *
  * Complete voice pipeline: Whisper STT → Claude → ElevenLabs TTS
  * No agent creation needed!
  */
@@ -17,14 +17,83 @@ import { eq } from 'drizzle-orm';
 const openai = new OpenAI({ apiKey: ENV.openaiApiKey });
 const anthropic = new Anthropic({ apiKey: ENV.anthropicApiKey });
 
+// Constants for session management
+const MAX_AUDIO_CHUNKS = 1000; // Prevent memory exhaustion
+const MAX_CONVERSATION_HISTORY = 20; // Limit conversation history
+const SESSION_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+const PROCESSING_TIMEOUT_MS = 60 * 1000; // 60 seconds for processing
+
 interface VoiceSession {
   ws: WebSocket;
   audioChunks: Buffer[];
   conversationHistory: Array<{ role: string; content: string }>;
   isProcessing: boolean;
+  lastActivity: number;
+  timeoutTimer?: NodeJS.Timeout;
+}
+
+interface ControlMessage {
+  type: 'start_recording' | 'stop_recording' | 'reset';
+  data?: unknown;
 }
 
 const sessions = new Map<WebSocket, VoiceSession>();
+
+/**
+ * Validate control message structure
+ */
+function isValidControlMessage(message: unknown): message is ControlMessage {
+  if (typeof message !== 'object' || message === null) {
+    return false;
+  }
+
+  const msg = message as Record<string, unknown>;
+  const validTypes = ['start_recording', 'stop_recording', 'reset'];
+
+  return typeof msg.type === 'string' && validTypes.includes(msg.type);
+}
+
+/**
+ * Clean up session resources
+ */
+function cleanupSession(ws: WebSocket): void {
+  const session = sessions.get(ws);
+  if (session) {
+    if (session.timeoutTimer) {
+      clearTimeout(session.timeoutTimer);
+    }
+    // Clear large data structures
+    session.audioChunks = [];
+    session.conversationHistory = [];
+    sessions.delete(ws);
+    console.log('[Voice Pipeline] Session cleaned up');
+  }
+}
+
+/**
+ * Reset session timeout
+ */
+function resetSessionTimeout(session: VoiceSession): void {
+  session.lastActivity = Date.now();
+
+  if (session.timeoutTimer) {
+    clearTimeout(session.timeoutTimer);
+  }
+
+  session.timeoutTimer = setTimeout(() => {
+    console.log('[Voice Pipeline] Session timed out due to inactivity');
+    try {
+      session.ws.send(JSON.stringify({
+        type: 'error',
+        message: 'Session timed out due to inactivity'
+      }));
+      session.ws.close(1000, 'Session timeout');
+    } catch (error) {
+      console.error('[Voice Pipeline] Error sending timeout message:', error);
+    }
+    cleanupSession(session.ws);
+  }, SESSION_TIMEOUT_MS);
+}
 
 /**
  * Initialize WebSocket server for voice pipeline
@@ -43,35 +112,83 @@ export function setupVoicePipelineServer(server: Server) {
       ws,
       audioChunks: [],
       conversationHistory: [],
-      isProcessing: false
+      isProcessing: false,
+      lastActivity: Date.now()
     };
     sessions.set(ws, session);
 
+    // Set up session timeout
+    resetSessionTimeout(session);
+
     // Send welcome message
-    ws.send(JSON.stringify({
-      type: 'connected',
-      message: 'Voice pipeline ready'
-    }));
+    try {
+      ws.send(JSON.stringify({
+        type: 'connected',
+        message: 'Voice pipeline ready'
+      }));
+    } catch (error) {
+      console.error('[Voice Pipeline] Error sending welcome message:', error);
+      cleanupSession(ws);
+      return;
+    }
 
     ws.on('message', async (data: Buffer) => {
       try {
+        resetSessionTimeout(session);
+
         // Try to parse as JSON (control messages)
-        const message = JSON.parse(data.toString());
-        await handleControlMessage(session, message);
-      } catch {
-        // Binary data (audio)
-        handleAudioChunk(session, data);
+        const messageStr = data.toString();
+        let parsedMessage: unknown;
+
+        try {
+          parsedMessage = JSON.parse(messageStr);
+        } catch {
+          // Binary data (audio)
+          handleAudioChunk(session, data);
+          return;
+        }
+
+        // Validate control message
+        if (!isValidControlMessage(parsedMessage)) {
+          console.warn('[Voice Pipeline] Invalid control message format:', parsedMessage);
+          ws.send(JSON.stringify({
+            type: 'error',
+            message: 'Invalid message format'
+          }));
+          return;
+        }
+
+        await handleControlMessage(session, parsedMessage);
+      } catch (error) {
+        console.error('[Voice Pipeline] Message handling error:', error);
+        try {
+          ws.send(JSON.stringify({
+            type: 'error',
+            message: error instanceof Error ? error.message : 'Internal server error'
+          }));
+        } catch (sendError) {
+          console.error('[Voice Pipeline] Error sending error message:', sendError);
+        }
       }
     });
 
     ws.on('close', () => {
       console.log('[Voice Pipeline] Client disconnected');
-      sessions.delete(ws);
+      cleanupSession(ws);
     });
 
     ws.on('error', (error) => {
       console.error('[Voice Pipeline] WebSocket error:', error);
-      sessions.delete(ws);
+      cleanupSession(ws);
+
+      // Try to close gracefully
+      try {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.close(1011, 'Internal error');
+        }
+      } catch (closeError) {
+        console.error('[Voice Pipeline] Error closing WebSocket:', closeError);
+      }
     });
   });
 
@@ -81,13 +198,20 @@ export function setupVoicePipelineServer(server: Server) {
 /**
  * Handle control messages from client
  */
-async function handleControlMessage(session: VoiceSession, message: any) {
-  const { type, data } = message;
+async function handleControlMessage(session: VoiceSession, message: ControlMessage) {
+  const { type } = message;
 
   switch (type) {
     case 'start_recording':
+      if (session.isProcessing) {
+        session.ws.send(JSON.stringify({
+          type: 'error',
+          message: 'Cannot start recording while processing'
+        }));
+        return;
+      }
+
       session.audioChunks = [];
-      session.isProcessing = false;
       session.ws.send(JSON.stringify({
         type: 'recording_started',
         message: 'Ready to receive audio'
@@ -95,6 +219,14 @@ async function handleControlMessage(session: VoiceSession, message: any) {
       break;
 
     case 'stop_recording':
+      if (session.audioChunks.length === 0) {
+        session.ws.send(JSON.stringify({
+          type: 'error',
+          message: 'No audio recorded'
+        }));
+        return;
+      }
+
       if (session.audioChunks.length > 0) {
         await processVoiceInput(session);
       }
@@ -104,10 +236,11 @@ async function handleControlMessage(session: VoiceSession, message: any) {
       session.audioChunks = [];
       session.conversationHistory = [];
       session.isProcessing = false;
+      session.ws.send(JSON.stringify({
+        type: 'reset_complete',
+        message: 'Session reset'
+      }));
       break;
-
-    default:
-      console.warn('[Voice Pipeline] Unknown message type:', type);
   }
 }
 
@@ -115,53 +248,97 @@ async function handleControlMessage(session: VoiceSession, message: any) {
  * Handle incoming audio chunks
  */
 function handleAudioChunk(session: VoiceSession, chunk: Buffer) {
-  if (!session.isProcessing) {
-    session.audioChunks.push(chunk);
+  if (session.isProcessing) {
+    console.warn('[Voice Pipeline] Received audio chunk while processing, ignoring');
+    return;
   }
+
+  // Prevent memory exhaustion
+  if (session.audioChunks.length >= MAX_AUDIO_CHUNKS) {
+    console.warn('[Voice Pipeline] Maximum audio chunks reached, discarding oldest');
+    session.audioChunks.shift();
+  }
+
+  session.audioChunks.push(chunk);
 }
 
 /**
- * Process voice input through the pipeline
+ * Process voice input through the pipeline with timeout
  */
 async function processVoiceInput(session: VoiceSession) {
   if (session.isProcessing) {
+    console.warn('[Voice Pipeline] Already processing, ignoring duplicate request');
     return;
   }
 
   session.isProcessing = true;
-  session.ws.send(JSON.stringify({ type: 'processing_started' }));
 
   try {
-    // Step 1: Transcribe audio with Whisper
-    const transcript = await transcribeAudio(session.audioChunks);
-    
-    session.ws.send(JSON.stringify({
-      type: 'transcript',
-      text: transcript
-    }));
+    session.ws.send(JSON.stringify({ type: 'processing_started' }));
+  } catch (error) {
+    console.error('[Voice Pipeline] Error sending processing_started:', error);
+    session.isProcessing = false;
+    return;
+  }
 
-    // Step 2: Process with Claude
-    const response = await processWithClaude(session, transcript);
-    
-    session.ws.send(JSON.stringify({
-      type: 'response_text',
-      text: response
-    }));
+  // Set up processing timeout
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    setTimeout(() => reject(new Error('Processing timeout')), PROCESSING_TIMEOUT_MS);
+  });
 
-    // Step 3: Generate speech with ElevenLabs
-    await generateAndStreamSpeech(session, response);
+  try {
+    // Race between actual processing and timeout
+    await Promise.race([
+      (async () => {
+        // Step 1: Transcribe audio with Whisper
+        const transcript = await transcribeAudio(session.audioChunks);
 
-    session.ws.send(JSON.stringify({ type: 'processing_complete' }));
+        if (!transcript || transcript.trim().length === 0) {
+          throw new Error('No speech detected in audio');
+        }
+
+        session.ws.send(JSON.stringify({
+          type: 'transcript',
+          text: transcript
+        }));
+
+        // Step 2: Process with Claude
+        const response = await processWithClaude(session, transcript);
+
+        if (!response || response.trim().length === 0) {
+          throw new Error('No response generated');
+        }
+
+        session.ws.send(JSON.stringify({
+          type: 'response_text',
+          text: response
+        }));
+
+        // Step 3: Generate speech with ElevenLabs
+        await generateAndStreamSpeech(session, response);
+
+        session.ws.send(JSON.stringify({ type: 'processing_complete' }));
+      })(),
+      timeoutPromise
+    ]);
 
   } catch (error) {
     console.error('[Voice Pipeline] Processing error:', error);
-    session.ws.send(JSON.stringify({
-      type: 'error',
-      message: error instanceof Error ? error.message : 'Processing failed'
-    }));
+
+    const errorMessage = error instanceof Error ? error.message : 'Processing failed';
+
+    try {
+      session.ws.send(JSON.stringify({
+        type: 'error',
+        message: errorMessage
+      }));
+    } catch (sendError) {
+      console.error('[Voice Pipeline] Error sending error message:', sendError);
+    }
   } finally {
     session.isProcessing = false;
     session.audioChunks = [];
+    resetSessionTimeout(session);
   }
 }
 
@@ -188,6 +365,12 @@ async function transcribeAudio(audioChunks: Buffer[]): Promise<string> {
  * Process text with Claude Sonnet 4.5
  */
 async function processWithClaude(session: VoiceSession, userMessage: string): Promise<string> {
+  // Limit conversation history to prevent memory issues
+  if (session.conversationHistory.length >= MAX_CONVERSATION_HISTORY) {
+    // Keep system context but remove oldest user/assistant pairs
+    session.conversationHistory = session.conversationHistory.slice(-MAX_CONVERSATION_HISTORY + 2);
+  }
+
   // Add user message to history
   session.conversationHistory.push({
     role: 'user',

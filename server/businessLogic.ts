@@ -445,13 +445,22 @@ export async function getPendingNotifications(): Promise<Notification[]> {
 
   // Check for overdue invoices
   const invoices = await db.getAllInvoices();
-  for (const invoice of invoices) {
-    if (invoice.status === INVOICE_STATUSES.OVERDUE) {
-      const customer = await db.getCustomer(invoice.customerId);
+  const overdueInvoices = invoices.filter(
+    (invoice) => invoice.status === INVOICE_STATUSES.OVERDUE
+  );
+
+  // Fetch all customers at once to avoid N+1 queries
+  if (overdueInvoices.length > 0) {
+    const customerIds = [...new Set(overdueInvoices.map((inv) => inv.customerId))];
+    const customers = await db.getAllCustomers();
+    const customerMap = new Map(customers.map((c) => [c.id, c]));
+
+    for (const invoice of overdueInvoices) {
+      const customer = customerMap.get(invoice.customerId);
       notifications.push({
         type: "error",
         title: "Invoice Overdue",
-        message: `Invoice #${invoice.invoiceNumber} for ${customer?.name} is overdue`,
+        message: `Invoice #${invoice.invoiceNumber} for ${customer?.name || 'Unknown Customer'} is overdue`,
         entityType: "invoice",
         entityId: invoice.id,
       });
