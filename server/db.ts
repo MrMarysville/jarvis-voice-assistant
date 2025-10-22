@@ -285,6 +285,24 @@ export async function getAllQuotes() {
   return await db.select().from(quotes).orderBy(desc(quotes.createdAt));
 }
 
+export async function deleteQuote(id: string): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  // Delete line items first
+  await db.delete(lineItems).where(eq(lineItems.quoteId, id));
+
+  // Delete line item groups and imprints
+  const groups = await db.select().from(lineItemGroups).where(eq(lineItemGroups.quoteId, id));
+  for (const group of groups) {
+    await db.delete(imprints).where(eq(imprints.groupId, group.id));
+  }
+  await db.delete(lineItemGroups).where(eq(lineItemGroups.quoteId, id));
+
+  // Delete the quote
+  await db.delete(quotes).where(eq(quotes.id, id));
+}
+
 export async function getQuotesByStatus(status: Quote["status"]) {
   const db = await getDb();
   if (!db) return [];
