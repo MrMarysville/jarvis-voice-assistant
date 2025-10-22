@@ -380,35 +380,61 @@ async function processWithClaude(session: VoiceSession, userMessage: string): Pr
   // System prompt for Jarvis
   const systemPrompt = `You are Jarvis, an AI assistant for a print shop management system.
 
-Your role is to help users create quotes for custom printing orders through natural conversation.
+Your role is to help users create quotes, manage customers, and search products through natural conversation.
 
+CUSTOMER MANAGEMENT:
+- You can create, update, search, and delete customers
+- Always confirm customer details before making changes
+- When creating quotes, you can create new customers or use existing ones
+
+QUOTE CREATION:
 When a user describes an order, you should:
-1. Listen carefully to all details (product, quantity, sizes, decoration method)
-2. Ask clarifying questions if information is missing (customer name, product details, quantity, pricing)
+1. Listen carefully to all details (customer, product, quantity, pricing, decoration method)
+2. Ask clarifying questions if information is missing
 3. Create the quote in the system once you have enough information
 4. Confirm the quote was created and provide the quote number and total
 
 Be professional, friendly, and efficient. Speak naturally and conversationally.
 
-You have access to these tools:
-- create_quote: Create a new quote for a customer
-  Required params: customer_name, line_items (array)
-  Optional params: customer_email, notes, due_date, group_name, decoration_method
-  Line item format: { product_name, quantity, unit_price, item_number?, color?, description? }
-  Example: {"tool": "create_quote", "params": {"customer_name": "ABC Company", "line_items": [{"product_name": "T-Shirt", "quantity": 100, "unit_price": 5.00}]}}
+AVAILABLE TOOLS:
 
-- search_products: Search for products in the catalog
-  Params: { query: "search term" }
+1. create_quote - Create a new quote for a customer
+   Required: customer_name, line_items (array)
+   Optional: customer_email, notes, due_date, group_name, decoration_method
+   Line item: { product_name, quantity, unit_price, item_number?, color?, description? }
+   Example: {"tool": "create_quote", "params": {"customer_name": "ABC Company", "line_items": [{"product_name": "T-Shirt", "quantity": 100, "unit_price": 5.00}]}}
 
-- get_customer_history: Get recent quotes for a customer
-  Params: { customer_name: "Company Name" }
+2. create_customer - Create a new customer
+   Required: name
+   Optional: email, phone, company, billing_address, shipping_address, notes
+   Example: {"tool": "create_customer", "params": {"name": "John Doe", "email": "john@example.com", "phone": "555-1234"}}
 
-When you need to use a tool, respond with ONLY a JSON object (no other text):
-{"tool": "create_quote", "params": {"customer_name": "ABC Company", "line_items": [{"product_name": "T-Shirt", "quantity": 100, "unit_price": 5.00}]}}
+3. update_customer - Update customer information
+   Required: name (to find customer)
+   Optional: email, phone, company, billing_address, shipping_address, notes
+   Example: {"tool": "update_customer", "params": {"name": "ABC Company", "email": "newemail@abc.com", "phone": "555-9999"}}
 
-Otherwise, respond with natural conversational text.
+4. search_customers - Search for customers by name or company
+   Required: query
+   Example: {"tool": "search_customers", "params": {"query": "ABC"}}
 
-Important: Always collect customer name, product details, quantity, and pricing before creating a quote.`;
+5. delete_customer - Delete a customer (only if no quotes/invoices exist)
+   Required: name
+   Example: {"tool": "delete_customer", "params": {"name": "Old Customer"}}
+
+6. get_customer_history - Get recent quotes for a customer
+   Required: customer_name
+   Example: {"tool": "get_customer_history", "params": {"customer_name": "ABC Company"}}
+
+7. search_products - Search for products in the catalog
+   Required: query
+   Example: {"tool": "search_products", "params": {"query": "t-shirt"}}
+
+IMPORTANT RULES:
+- When you need to use a tool, respond with ONLY a JSON object (no other text)
+- Otherwise, respond with natural conversational text
+- Always collect all necessary information before using tools
+- Confirm destructive actions (delete) with the user first`;
 
   // Call Claude
   const response = await anthropic.messages.create({
@@ -675,19 +701,138 @@ async function executeTool(toolName: string, params: any): Promise<any> {
       };
 
     case 'get_customer_history':
-      const quotes = await db.select()
+      const { getCustomer } = await import('./db');
+
+      // First find customer by name
+      const { getCustomerByName: getCustomerByNameHist } = await import('./db');
+      const histCustomer = await getCustomerByNameHist(params.customer_name);
+
+      if (!histCustomer) {
+        return {
+          success: false,
+          error: `Customer "${params.customer_name}" not found`
+        };
+      }
+
+      const customerQuotes = await db.select()
         .from(schema.quotes)
-        .where(eq(schema.quotes.customerName, params.customer_name))
+        .where(eq(schema.quotes.customerId, histCustomer.id))
         .limit(5);
 
       return {
         success: true,
-        quotes: quotes.map(q => ({
-          id: q.id,
+        customer_name: histCustomer.name,
+        quotes: customerQuotes.map(q => ({
+          quote_number: q.quoteNumber,
           status: q.status,
-          total: q.total,
+          total: q.totalAmount,
           created_at: q.createdAt
         }))
+      };
+
+    case 'create_customer':
+      const { createCustomer: createCust } = await import('./db');
+
+      const newCustomer = await createCust({
+        name: params.name,
+        email: params.email || null,
+        phone: params.phone || null,
+        company: params.company || params.name,
+        billingAddress: params.billing_address || null,
+        shippingAddress: params.shipping_address || null,
+        notes: params.notes || null,
+      });
+
+      return {
+        success: true,
+        customer_id: newCustomer.id,
+        customer_name: newCustomer.name,
+        message: `Customer "${newCustomer.name}" created successfully`
+      };
+
+    case 'update_customer':
+      const { updateCustomer, getCustomerByName: getCustomerUpdate } = await import('./db');
+
+      // Find customer by name
+      const customerToUpdate = await getCustomerUpdate(params.name);
+
+      if (!customerToUpdate) {
+        return {
+          success: false,
+          error: `Customer "${params.name}" not found`
+        };
+      }
+
+      // Build update object with only provided fields
+      const updates: any = {};
+      if (params.email !== undefined) updates.email = params.email;
+      if (params.phone !== undefined) updates.phone = params.phone;
+      if (params.company !== undefined) updates.company = params.company;
+      if (params.billing_address !== undefined) updates.billingAddress = params.billing_address;
+      if (params.shipping_address !== undefined) updates.shippingAddress = params.shipping_address;
+      if (params.notes !== undefined) updates.notes = params.notes;
+
+      await updateCustomer(customerToUpdate.id, updates);
+
+      return {
+        success: true,
+        customer_name: customerToUpdate.name,
+        message: `Customer "${customerToUpdate.name}" updated successfully`
+      };
+
+    case 'search_customers':
+      const { searchCustomers } = await import('./db');
+
+      const foundCustomers = await searchCustomers(params.query);
+
+      return {
+        success: true,
+        count: foundCustomers.length,
+        customers: foundCustomers.slice(0, 10).map(c => ({
+          name: c.name,
+          company: c.company,
+          email: c.email,
+          phone: c.phone
+        })),
+        message: `Found ${foundCustomers.length} customer${foundCustomers.length !== 1 ? 's' : ''} matching "${params.query}"`
+      };
+
+    case 'delete_customer':
+      const { deleteCustomer, getCustomerByName: getCustomerDelete } = await import('./db');
+
+      // Find customer by name
+      const customerToDelete = await getCustomerDelete(params.name);
+
+      if (!customerToDelete) {
+        return {
+          success: false,
+          error: `Customer "${params.name}" not found`
+        };
+      }
+
+      // Check if customer has quotes or invoices
+      const customerQuotesCheck = await db.select()
+        .from(schema.quotes)
+        .where(eq(schema.quotes.customerId, customerToDelete.id))
+        .limit(1);
+
+      const customerInvoices = await db.select()
+        .from(schema.invoices)
+        .where(eq(schema.invoices.customerId, customerToDelete.id))
+        .limit(1);
+
+      if (customerQuotesCheck.length > 0 || customerInvoices.length > 0) {
+        return {
+          success: false,
+          error: `Cannot delete customer "${params.name}" - they have existing quotes or invoices. Please archive instead.`
+        };
+      }
+
+      await deleteCustomer(customerToDelete.id);
+
+      return {
+        success: true,
+        message: `Customer "${params.name}" deleted successfully`
       };
 
     default:

@@ -166,6 +166,13 @@ export async function updateCustomer(id: string, updates: Partial<InsertCustomer
   return getCustomer(id);
 }
 
+export async function deleteCustomer(id: string): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  await db.delete(customers).where(eq(customers.id, id));
+}
+
 export async function getCustomer(id: string): Promise<Customer | undefined> {
   const db = await getDb();
   if (!db) return undefined;
